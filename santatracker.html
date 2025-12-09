@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Santa Tracker</title>
+    <link rel="stylesheet" href="assets/css/scratchstyles.css">
+</head>
+<body>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    
+<style>
+  :root{--bg1:#071033;--bg2:#000}
+  body{margin:0;font-family:Arial;background:radial-gradient(circle,var(--bg1),var(--bg2));color:#fff}
+  h1{text-align:center;margin:12px 0}
+  #map{height:460px;border-radius:14px;margin:0 12px}
+  .panel{max-width:980px;margin:12px auto;background:rgba(0,0,0,0.55);padding:14px;border-radius:12px}
+  select,button{width:100%;padding:10px;border-radius:999px;border:none;margin-top:10px}
+  button{background:#c91818;color:white;font-weight:700;cursor:pointer}
+  #countdownText{ text-align:center;margin-top:10px;font-size:18px }
+  .santa-emoji{ font-size:38px; animation:santaBob 2s ease-in-out infinite; transform-origin:50% 50% }
+  @keyframes santaBob { 0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)} }
+
+  /* reindeer strip across screen */
+  .reindeer { position:fixed; top:54%; left:-150px; font-size:30px; animation:reindeerFly 18s linear infinite; pointer-events:none; z-index:999 }
+  @keyframes reindeerFly { from{left:-150px} to{left:110%} }
+
+  /* snow */
+  .snow { position:fixed; top:-10px; pointer-events:none; color:white; }
+  @keyframes fall { to { transform: translateY(110vh) } }
+
+  /* progress circle */
+  .circleWrap{ display:flex; justify-content:center; margin-top:12px }
+  svg { width:124px; height:124px; }
+  circle { fill:none; stroke-width:10; }
+  #bgRing { stroke:#2b2b36; }
+  #progressRing { stroke:#00ffd1; stroke-linecap:round; transition: stroke-dashoffset 0.6s linear; transform: rotate(-90deg); transform-origin: 50% 50%; }
+
+  /* tooltip label for north pole */
+  .northLabel { background:rgba(0,0,0,0.6); padding:6px 8px; border-radius:8px; color:#fff; font-weight:700; }
+</style>
+</head>
+<body>
+
+<h1>🎅 Santa Tracker</h1>
+<a href="christmas.html" class="backhome">Back to Christmas page</a>
+
+<div id="map"></div>
+
+<div class="panel" style="max-width:980px;margin:12px auto">
+  <select id="country">
+    <option value="">Select country</option>
+    <option>United States</option>
+    <option>Canada</option>
+    <option>United Kingdom</option>
+    <option>Australia</option>
+    <option>Other Country</option>
+  </select>
+
+  <select id="state"></select>
+
+  <button id="trackBtn">TRACK SANTA</button>
+
+  <div id="countdownText">Choose a location and press <strong>TRACK SANTA</strong></div>
+
+  <div class="circleWrap" aria-hidden="false">
+    <svg viewBox="0 0 120 120" role="img" aria-label="Countdown progress">
+      <circle id="bgRing" cx="60" cy="60" r="50"></circle>
+      <circle id="progressRing" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="0"></circle>
+    </svg>
+  </div>
+</div>
+
+<div class="reindeer">🦌🦌🦌</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ---------- Map & markers ---------- */
+const map = L.map('map', { zoomControl: true }).setView([25,0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+/* Create two markers at North Pole:
+   - santaMarker (moves): 🎅
+   - poleMarker (stationary): 📍 + tooltip "NORTH POLE" */
+const northCoords = [90, 0];
+
+// Santa (moving) — only emoji, so it looks crisp at any zoom
+const santaIcon = L.divIcon({
+  html: '<div class="santa-emoji">🎅</div>',
+  className: '',
+  iconSize: [38,38],
+  iconAnchor: [19,19]
+});
+const santaMarker = L.marker(northCoords, { icon: santaIcon, interactive: false }).addTo(map);
+
+// Pole marker with label (stationary)
+const poleIcon = L.divIcon({
+  html: '<div style="font-size:20px;">📍</div>',
+  className: '',
+  iconSize: [28,28],
+  iconAnchor: [14,14]
+});
+const poleMarker = L.marker(northCoords, { icon: poleIcon, interactive: false }).addTo(map);
+// Add a visible permanent tooltip-like label for clarity
+poleMarker.bindTooltip('<span class="northLabel">NORTH POLE</span>', {permanent:true, direction:'right', offset:[10,0]}).openTooltip();
+
+/* ---------- UI references ---------- */
+const countryBox = document.getElementById('country');
+const stateBox = document.getElementById('state');
+const trackBtn = document.getElementById('trackBtn');
+const countdownText = document.getElementById('countdownText');
+const progressRing = document.getElementById('progressRing');
+
+/* ---------- Reindeer & snow ---------- */
+// reindeer already in DOM; now create snow flakes
+for (let i=0;i<80;i++){
+  const s = document.createElement('div');
+  s.className = 'snow';
+  s.innerHTML = '❄';
+  s.style.left = (Math.random()*100) + 'vw';
+  s.style.animationDuration = (3 + Math.random()*6) + 's';
+  s.style.fontSize = (8 + Math.random()*16) + 'px';
+  s.style.opacity = (0.4 + Math.random()*0.7);
+  document.body.appendChild(s);
+}
+
+/* ---------- Timezone + geo data ---------- */
+/* US state → timezone */
+const usStates = {
+ "Alabama":"America/Chicago","Alaska":"America/Anchorage","Arizona":"America/Phoenix","Arkansas":"America/Chicago",
+ "California":"America/Los_Angeles","Colorado":"America/Denver","Connecticut":"America/New_York","Delaware":"America/New_York",
+ "Florida":"America/New_York","Georgia":"America/New_York","Hawaii":"Pacific/Honolulu","Idaho":"America/Boise",
+ "Illinois":"America/Chicago","Indiana":"America/New_York","Iowa":"America/Chicago","Kansas":"America/Chicago",
+ "Kentucky":"America/New_York","Louisiana":"America/Chicago","Maine":"America/New_York","Maryland":"America/New_York",
+ "Massachusetts":"America/New_York","Michigan":"America/New_York","Minnesota":"America/Chicago","Mississippi":"America/Chicago",
+ "Missouri":"America/Chicago","Montana":"America/Denver","Nebraska":"America/Chicago","Nevada":"America/Los_Angeles",
+ "New Hampshire":"America/New_York","New Jersey":"America/New_York","New Mexico":"America/Denver","New York":"America/New_York",
+ "North Carolina":"America/New_York","North Dakota":"America/Chicago","Ohio":"America/New_York","Oklahoma":"America/Chicago",
+ "Oregon":"America/Los_Angeles","Pennsylvania":"America/New_York","Rhode Island":"America/New_York",
+ "South Carolina":"America/New_York","South Dakota":"America/Chicago","Tennessee":"America/Chicago","Texas":"America/Chicago",
+ "Utah":"America/Denver","Vermont":"America/New_York","Virginia":"America/New_York","Washington":"America/Los_Angeles",
+ "West Virginia":"America/New_York","Wisconsin":"America/Chicago","Wyoming":"America/Denver"
+};
+
+/* Simple geo points for each state + some countries (approx center) */
+const geo = {
+ /* US states (centroids, approximate) */
+ "Alabama":{lat:32.8,lon:-86.9},"Alaska":{lat:64,lon:-149},"Arizona":{lat:34.2,lon:-111.7},
+ "Arkansas":{lat:34.8,lon:-92.3},"California":{lat:36.2,lon:-119.4},"Colorado":{lat:39.0,lon:-105.5},
+ "Connecticut":{lat:41.6,lon:-72.7},"Delaware":{lat:39.0,lon:-75.5},"Florida":{lat:27.7,lon:-81.5},
+ "Georgia":{lat:32.2,lon:-83.4},"Hawaii":{lat:21.3,lon:-157.8},"Idaho":{lat:44.3,lon:-114.0},
+ "Illinois":{lat:40.0,lon:-89.0},"Indiana":{lat:40.3,lon:-86.1},"Iowa":{lat:42.0,lon:-93.2},
+ "Kansas":{lat:38.5,lon:-98.0},"Kentucky":{lat:37.9,lon:-84.3},"Louisiana":{lat:31.0,lon:-91.8},
+ "Maine":{lat:45.2,lon:-69.4},"Maryland":{lat:39.0,lon:-76.7},"Massachusetts":{lat:42.1,lon:-71.7},
+ "Michigan":{lat:44.3,lon:-85.6},"Minnesota":{lat:46.3,lon:-94.0},"Mississippi":{lat:32.7,lon:-89.7},
+ "Missouri":{lat:38.5,lon:-92.4},"Montana":{lat:46.9,lon:-110.4},"Nebraska":{lat:41.5,lon:-99.8},
+ "Nevada":{lat:39.3,lon:-116.9},"New Hampshire":{lat:43.7,lon:-71.5},"New Jersey":{lat:40.1,lon:-74.5},
+ "New Mexico":{lat:34.4,lon:-106.0},"New York":{lat:43.0,lon:-75.0},"North Carolina":{lat:35.5,lon:-79.0},
+ "North Dakota":{lat:47.5,lon:-100.5},"Ohio":{lat:40.3,lon:-82.8},"Oklahoma":{lat:35.6,lon:-97.5},
+ "Oregon":{lat:44.0,lon:-120.5},"Pennsylvania":{lat:41.1,lon:-77.8},"Rhode Island":{lat:41.7,lon:-71.6},
+ "South Carolina":{lat:33.8,lon:-80.6},"South Dakota":{lat:44.5,lon:-100.3},"Tennessee":{lat:35.7,lon:-86.5},
+ "Texas":{lat:31.0,lon:-99.0},"Utah":{lat:39.3,lon:-111.5},"Vermont":{lat:44.0,lon:-72.7},
+ "Virginia":{lat:37.5,lon:-78.7},"Washington":{lat:47.5,lon:-120.5},"West Virginia":{lat:38.6,lon:-80.6},
+ "Wisconsin":{lat:44.8,lon:-89.5},"Wyoming":{lat:43.1,lon:-107.6},
+
+ /* Countries (approx centers) */
+ "Canada":{lat:56.1,lon:-96.9},"United Kingdom":{lat:54.0,lon:-2.0},"Australia":{lat:-25.0,lon:133.0},
+ "Other Country":{lat:20.0,lon:0.0}
+};
+
+/* ---------- populate UI ---------- */
+countryBox.addEventListener('change', () => {
+  stateBox.innerHTML = '';
+  if (countryBox.value === 'United States') {
+    Object.keys(usStates).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s; opt.textContent = s;
+      stateBox.appendChild(opt);
+    });
+  } else {
+    const opt = document.createElement('option');
+    opt.value = countryBox.value || 'Other Country';
+    opt.textContent = countryBox.value ? countryBox.value + ' (timezone detected automatically)' : 'Time detected automatically';
+    stateBox.appendChild(opt);
+  }
+});
+
+/* ---------- helpers: target time & animation ---------- */
+function getChristmasMidnight(timeZone) {
+  // returns JS Date object for local midnight Dec 25 (in the provided tz)
+  const nowLocal = new Date(new Date().toLocaleString('en-US', { timeZone }));
+  let year = nowLocal.getFullYear();
+  let target = new Date(`${year}-12-25T00:00:00`);
+  if (nowLocal > target) target = new Date(`${year + 1}-12-25T00:00:00`);
+  return target;
+}
+
+/* move Santa smoothly along straight line */
+let flyInterval = null;
+function animateSantaTo(dest, durationMs = 18000) {
+  clearInterval(flyInterval);
+  const start = { lat: 90, lon: 0 };
+  const steps = Math.max(80, Math.floor(durationMs / 60));
+  let step = 0;
+  flyInterval = setInterval(() => {
+    const t = Math.min(1, step / steps);
+    const lat = start.lat + (dest.lat - start.lat) * t;
+    const lon = start.lon + (dest.lon - start.lon) * t;
+    santaMarker.setLatLng([lat, lon]);
+    step++;
+    if (t >= 1) clearInterval(flyInterval);
+  }, 60);
+}
+
+/* ---------- progress ring logic ---------- */
+const R = 50;
+const circumference = 2 * Math.PI * R;
+progressRing.style.strokeDasharray = String(circumference);
+let initialTotalMs = null; // will store total ms remaining when tracking started
+function updateProgress(remainingMs) {
+  if (!initialTotalMs || initialTotalMs <= 0) {
+    // no progress to show (or finished)
+    progressRing.style.strokeDashoffset = circumference;
+    return;
+  }
+  const frac = remainingMs / initialTotalMs; // 1 -> full, 0 -> empty
+  const dashOffset = circumference * (1 - frac); // rotate so decreasing looks right
+  progressRing.style.strokeDashoffset = dashOffset;
+}
+
+/* ---------- route and countdown ---------- */
+let currentRoute = null;
+let countdownInterval = null;
+
+function clearOld() {
+  if (currentRoute) { map.removeLayer(currentRoute); currentRoute = null; }
+  if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+  initialTotalMs = null;
+}
+
+/* Track button handler */
+trackBtn.addEventListener('click', () => {
+  clearOld();
+
+  // determine timezone and destination location
+  let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let destKey, destCoords;
+  if (countryBox.value === 'United States') {
+    const st = stateBox.value;
+    if (!st) { alert('Select a state'); return; }
+    tz = usStates[st];
+    destKey = st;
+    destCoords = geo[st];
+  } else {
+    // for other countries use browser timezone and approximate coords from geo (or fallback)
+    const countryName = stateBox.value || countryBox.value || 'Other Country';
+    destKey = countryName;
+    destCoords = geo[countryName] || geo['Other Country'];
+  }
+
+  // draw route from north pole -> destination
+  currentRoute = L.polyline([northCoords, [destCoords.lat, destCoords.lon]], { color: 'red', weight: 3 }).addTo(map);
+
+  // animate santa from north pole to destination
+  animateSantaTo(destCoords);
+
+  // compute target midnight in that timezone
+  const target = getChristmasMidnight(tz);
+
+  // compute initial remaining ms and store for ring scaling
+  const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+  let remainingMs = target - nowInTz;
+  if (remainingMs < 0) remainingMs = 0;
+  initialTotalMs = remainingMs;
+
+  // update UI + start countdown interval
+  function tick() {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+    let r = target - now;
+    if (r <= 0) {
+      countdownText.textContent = '🎁 Santa has arrived!';
+      updateProgress(0);
+      clearInterval(countdownInterval);
+      return;
+    }
+    // hours & minutes
+    const hrs = Math.floor(r / (1000 * 3600));
+    const mins = Math.floor((r % (1000 * 3600)) / (1000 * 60));
+    countdownText.textContent = `Santa arrives in ${hrs} hours ${mins} minutes — heading to ${destKey}`;
+
+    // update ring based on fraction of remaining vs initial
+    updateProgress(r);
+  }
+
+  // initial draw of ring: strokeDashoffset should be 0 (full) when just started (frac=1)
+  progressRing.style.strokeDashoffset = 0;
+
+  // first tick then interval
+  tick();
+  countdownInterval = setInterval(tick, 1000);
+});
+
+/* ---------- ensure santa + pole are at exact north pole initially ---------- */
+santaMarker.setLatLng(northCoords);
+poleMarker.setLatLng(northCoords);
+
+
+/* ---------- optional: keep map from auto-panning when lines/markers update ----------
+   We never call fitBounds after adding the route, so the map will stay where user left it. */
+
+/* Done. Enjoy! */
+</script>
+</body>
+</html>
+</body>
+</html>
